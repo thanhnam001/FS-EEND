@@ -1,0 +1,132 @@
+# LS-EEND finetune on RAMC, initialised from the authors' released
+# phase-1 simulated checkpoint (1-8 speakers). Derived from their own
+# dihard3 config so every field keeps their meaning; only the data dirs,
+# init_ckpt, batch_size, max_speakers and model_name are changed.
+#
+# 8 kHz IS MANDATORY HERE, not a choice. The released checkpoint's
+# input_projection is (256, 345) = 23 mels x 15 context, and
+# datasets/feature.py hard-wires logmel23_cummn to sr=8000 and never
+# resamples. Our own pipeline is 40 mels at 16 kHz (= 600), so these weights
+# cannot accept our features. Build the inputs with scripts/prepare_8k_data.sh.
+# Near-lossless for RAMC (telephony); a real handicap on MSDWild (wideband).
+#
+# SCORING CONVENTION for this corpus: collar 0, NO median filtering (median 1 at inference)
+#
+# COST -- decide max_epochs deliberately, do not just inherit 500.
+# Measured on an RTX 3060 Laptop 6 GB: 3.9 s/step at batch_size 4 with 20 s
+# chunks = 20.5x realtime; batch 8 thrashes and batch 16 needs ~15.5 GB, so
+# batch_size is set to 16 here for a >=24 GB server card and is the main
+# throughput lever. One epoch over RAMC train is 149.6 audio-hours
+# (13,464 chunks of 40 s, 841 steps at batch 16).
+# At the laptop's 20.5x realtime, 500 epochs would be ~152 days; a server
+# card is faster but this has NOT been measured, so treat any speedup as an
+# estimate. Their 500 is calibrated to CALLHOME's much smaller epoch, not to a
+# 150-hour corpus.
+# Whatever budget is used, report it as a deviation from our own 500-epoch
+# protocol rather than as a matched setting.
+#
+# Run: ./scripts/run_finetune_ramc.sh
+log:
+  model_name: finetune_ramc_8k
+  log_dir: !ref ./logs/<log[model_name]>
+  save_top_k: -1
+  start_epoch: 90
+  end_epoch: 99
+  save_avg_path: # !ref /mnt/home/liangdi/projects/pl_version/pl_eend/logs/spk_onl_tfm_enc_dec_10w/version_7/<model[arch]>_2spk_90_100_avg_model.ckpt
+
+training:
+  batch_size: 16
+  n_workers: 8
+  shuffle: True
+  lr: 1.0e-05
+  opt: adam                   # [adam, sgd, noam]
+  max_epochs: 500
+  grad_clip: 5
+  grad_accm: 1
+  scheduler:
+  schedule_scale:  # 0.4 # 1.0
+  warm_steps:  # 20000 # 100000
+  early_stop_epoch: 500
+  init_ckpt: ./ckpt/simu/simu_1-8spk.ckpt
+  dist_strategy: # ddp       # [ddp, dp]
+  sync_batchnorm: True
+  val_interval: 1             # validation after ? epoch(s) of training
+  seed: 777
+
+
+model:
+  arch: onlineConformerDA_cummn_retention_emb1dcnn_linear_nonautoreg_l2norm_on_the_fly_lsa_padspk_before_loss2
+  params:
+    n_units: 256
+    n_heads: 4
+    enc_n_layers: 4
+    feed_forward_expansion_factor: 4
+    # dec_dim_feedforward: 2048
+    conv_expansion_factor: 2
+    dropout: 0.1
+    conv_kernel_size: 16
+    half_step_residual: True
+    max_seqlen: !ref <data[chunk_size]>
+    recurrent_chunk_size: 500
+    dec_n_layers: 2
+    conv_delay: 9
+  
+data:
+  num_speakers:
+  max_speakers: 10 
+  context_recp: 7
+  label_delay: 0  # number of frames delayed from original labels for uni-directional rnn to see in the future
+  feat_type: logmel23_cummn # ['', 'log', 'logmel', 'logmel23', 'logmel23_mn', 'logmel23_mvn', 'logmel23_swn']
+  chunk_size: 4000
+  chunk_step: 4000
+  val_chunk_size: 16000
+  val_chunk_step: 4000
+  subsampling: 10
+  use_last_samples: True
+  shuffle: False
+  augment:
+  feat:
+    sample_rate: 8000
+    win_length: 200
+    n_fft: 1024
+    hop_length: 80
+    n_mels: 23
+    f_max: 4000
+    power: 1
+  scaler:
+    statistic: instance # instance or dataset-wide statistic
+    normtype: minmax # minmax or standard or mean normalization
+    dims: [1, 2] # dimensions over which normalization is applied
+
+  train_data_dir: /data/ocr/namvt17/custom-diaper/database/ramc/kaldi_8k/train
+  val_data_dir: /data/ocr/namvt17/custom-diaper/database/ramc/kaldi_8k/dev
+
+task:
+  max_speakers: 
+  spk_attractor:
+    enable: True
+    shuffle: True
+    enc_dropout: 0.5
+    dec_dropout: 0.5
+    consis_weight: 1  # 0 for not using  
+
+# Used for debugging, how many data would be used in this run
+debug:                
+  num_sanity_val_steps: 3         # Validation steps before training
+  log_every_n_steps: 5          # Frequency of updating logs
+  # flush_logs_every_n_steps: 1     # Frequency of flushing logs
+  # limit_train_batches: 0.1      # How many train data to be used (0-1)
+  # limit_val_batches: 0.1          # How many val data to be used 
+  # limit_test_batches: 0.1       # How many test data to be used 
+
+
+
+
+
+# NOT SURE
+# parser.add_argument('--gradient-accumulation-steps', default=1, type=int) |-> grad_acce
+
+# parser.add_argument('--gpu', '-g', default=-1, type=int,
+#                     help='GPU ID (negative value indicates CPU)')
+# parser.add_argument('--num-frames', default=2000, type=int,
+#                     help='number of frames in one utterance') |-> chunk_size
