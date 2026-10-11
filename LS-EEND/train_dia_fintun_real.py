@@ -145,7 +145,21 @@ def train(configs, gpus, checkpoint_resume, test_folder=None):
         print("Load from checkpoint {} ... ".format(configs["training"]["init_ckpt"]))
         ckpt_package = torch.load(configs["training"]["init_ckpt"], map_location="cpu")
         # state_dict = ckpt_package["state_dict"]
-        spk_dia_main.load_state_dict(ckpt_package)
+        if isinstance(ckpt_package, dict) and "state_dict" in ckpt_package:
+            ckpt_package = ckpt_package["state_dict"]
+        # The released 1-8spk checkpoints were saved with the old attractor
+        # decoder key names; streaming_infer_dia.py already remaps them, but
+        # this path did not, so finetuning from a released checkpoint failed
+        # with a strict load error. Apply the same remap here.
+        ckpt_package = {
+            k.replace("dec.attractor_decoder.layers.", "dec.layers."): v
+            for k, v in ckpt_package.items()
+        }
+        missing, unexpected = spk_dia_main.load_state_dict(ckpt_package, strict=False)
+        if missing:
+            print("[WARN] missing keys ({}): {}".format(len(missing), list(missing)[:5]))
+        if unexpected:
+            print("[WARN] unexpected keys ({}): {}".format(len(unexpected), list(unexpected)[:5]))
     
     # Freezing parameters
     # Freeze all
