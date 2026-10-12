@@ -64,6 +64,21 @@ TAG="$(basename "$CKPT" .ckpt)"
 OUT="results/${CORPUS}_8k/${TAG}/median${MEDIAN}"
 mkdir -p "$OUT"
 
+# score.txt is the artifact worth keeping: the DER used to go only to the
+# terminal, so a finished run left the RTTMs on disk but not the number.
+SCORE="${OUT}/score.txt"
+{
+  echo "corpus:  ${CORPUS}"
+  echo "ckpt:    ${CKPT}"
+  echo "config:  conf/infer_${CORPUS}_8k.yaml"
+  echo "median:  ${MEDIAN}"
+  echo "collar:  ${COLLAR:-0}"
+  echo "ref:     ${REF}"
+  echo "kaldi:   ${KALDI}"
+  echo "date:    $(date '+%F %T')"
+  echo
+} > "$SCORE"
+
 echo "[$(date '+%F %T')] inference: ${CORPUS}  ckpt=${CKPT}  median=${MEDIAN}"
 CUDA_VISIBLE_DEVICES="${GPUS}" conda run -p "${LSEEND_ENV}" --no-capture-output \
     python batch_infer_kaldi.py \
@@ -74,13 +89,15 @@ SYS="${OUT}/sys.rttm"
 cat "${OUT}"/rttms/*.rttm > "$SYS"
 n_sys=$(ls "${OUT}"/rttms/*.rttm | wc -l)
 n_ref=$(awk '{print $2}' "$REF" | sort -u | wc -l)
-echo "recordings: ${n_sys} predicted, ${n_ref} in reference"
-[ "$n_sys" -eq "$n_ref" ] || echo "WARNING: count mismatch -- a partial run scores as 100% miss on the missing files"
+echo "recordings: ${n_sys} predicted, ${n_ref} in reference" | tee -a "$SCORE"
+if [ "$n_sys" -ne "$n_ref" ]; then
+  echo "WARNING: count mismatch -- a partial run scores as 100% miss on the missing files" | tee -a "$SCORE"
+fi
 
 score () {  # <label> <reference>
-  echo "--- $1"
+  echo "--- $1" | tee -a "$SCORE"
   conda run -p "${DSCORE_ENV}" --no-capture-output python -u "${DSCORE_SRC}/score.py" \
-      $COLLAR -r "$2" -s "$SYS" 2>/dev/null | awk 'NR==1 || /OVERALL/'
+      $COLLAR -r "$2" -s "$SYS" 2>/dev/null | awk 'NR==1 || /OVERALL/' | tee -a "$SCORE"
 }
 
 if [ "$CORPUS" = "ramc" ]; then
@@ -93,3 +110,4 @@ else
 fi
 
 echo "[$(date '+%F %T')] done -> ${OUT}"
+echo "score saved to ${SCORE}"
