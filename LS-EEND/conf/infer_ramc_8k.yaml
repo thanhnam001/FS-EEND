@@ -80,8 +80,8 @@ data:
     normtype: minmax # minmax or standard or mean normalization
     dims: [1, 2] # dimensions over which normalization is applied
 
-  train_data_dir: /data1/liangdi/dataset_spkdia/dihard3/data/dihard3_dev # swb_sre_tr_ns1n2n3n4n5n6_beta2n2n5n9n13n17_100000 # swb_sre_tr_ns1n2n3n4_beta2n2n5n9_100000 # swb_sre_tr_ns2_beta2_100000  # swb_sre_tr_ns1n2n3n4_beta2n2n2n2_20000
-  val_data_dir: /data1/liangdi/dataset_spkdia/dihard3/data/dihard3_eval     # swb_sre_cv_ns1n2n3n4n5n6_beta2n2n5n9n13n17_500 # swb_sre_cv_ns1n2n3n4_beta2n2n5n9_500     # swb_sre_cv_ns2_beta2_500  # swb_sre_cv_ns1n2n3n4_beta2n2n2n2_500
+  train_data_dir: "" # unused: batch_infer_kaldi.py reads --kaldi_dir, not this
+  val_data_dir: "" # unused: batch_infer_kaldi.py reads --kaldi_dir, not this
 
 task:
   max_speakers: 

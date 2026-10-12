@@ -9,7 +9,7 @@ set -e
 #
 # Passing the simulated checkpoint gives the ZERO-SHOT number. That is not a
 # method comparison -- the model has never seen the corpus. Locally it scored
-# MSDWild 43.74 at collar 0.25, failing by merging turns (4,106 segments
+# MSDWild 43.98 at collar 0.25, failing by merging turns (4,106 segments
 # averaging 10.07 s against a reference of 14,209 at 2.53 s). Use a finetuned
 # checkpoint for anything you intend to report.
 #
