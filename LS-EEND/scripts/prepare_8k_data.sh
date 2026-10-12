@@ -35,7 +35,13 @@ set -e
 
 DATA_ROOT="${DATA_ROOT:-/data/ocr/namvt17/dataset/diarization}"
 OUT_ROOT="${OUT_ROOT:-$DATA_ROOT}"
-PY="${PY:-python}"
+# Needs numpy, soundfile and scipy. Default to the project env rather than
+# whatever `python` happens to resolve to on the server.
+LSEEND_ENV="${LSEEND_ENV:-/data/ocr/namvt17/FS-EEND/.venv}"
+PY="${PY:-${LSEEND_ENV}/bin/python}"
+
+# Accept either an absolute interpreter path or a bare name on PATH.
+command -v "$PY" >/dev/null 2>&1 || { echo "no python at: $PY" >&2; echo "pass PY=/path/to/python or LSEEND_ENV=<env>" >&2; exit 1; }
 
 if [ ! -d "$DATA_ROOT" ]; then
   echo "DATA_ROOT does not exist: $DATA_ROOT" >&2

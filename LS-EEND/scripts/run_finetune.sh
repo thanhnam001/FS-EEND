@@ -38,7 +38,7 @@ case "$CORPUS" in
   *) echo "corpus must be msdwild or ramc" >&2; exit 1 ;;
 esac
 
-LSEEND_ENV="${LSEEND_ENV:-lseend}"
+LSEEND_ENV="${LSEEND_ENV:-/data/ocr/namvt17/FS-EEND/.venv}"   # path-based, like custom-diaper/.venv
 GPUS="${GPUS:-0}"
 LOG_DIR="${LOG_DIR:-logs/runs}"
 CONFIG="conf/finetune_${CORPUS}_8k.yaml"
@@ -56,6 +56,7 @@ VAL_DIR="${OUT_ROOT}/${CORPUS}/kaldi_8k/dev"
 for d in "$TRAIN_DIR" "$VAL_DIR"; do
   [ -d "$d" ] || { echo "missing: $d -- run ./scripts/prepare_8k_data.sh first" >&2; exit 1; }
 done
+[ -d "$LSEEND_ENV" ] || { echo "missing conda env: $LSEEND_ENV" >&2; echo "create it or pass LSEEND_ENV=<path>; see scripts/README.md" >&2; exit 1; }
 [ -s "$CKPT" ] || { echo "missing init checkpoint: $CKPT -- see ./scripts/download_simu_ckpt.sh" >&2; exit 1; }
 
 # Always write a run-local copy, so the config that actually ran is recorded
@@ -78,7 +79,7 @@ echo "  batch_size: $(grep -m1 '^  batch_size:' "$RUN_CONFIG" | tr -s ' ' | cut 
 echo "  CUDA_VISIBLE_DEVICES=${GPUS}"
 echo "=================================================================="
 
-CUDA_VISIBLE_DEVICES="${GPUS}" conda run -n "${LSEEND_ENV}" --no-capture-output \
+CUDA_VISIBLE_DEVICES="${GPUS}" conda run -p "${LSEEND_ENV}" --no-capture-output \
     python train_dia_fintun_real.py --configs "${RUN_CONFIG}" --gpus 0, \
     2>&1 | tee "${LOG_DIR}/finetune_${CORPUS}.log"
 

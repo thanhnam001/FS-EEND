@@ -42,7 +42,7 @@ DATA_ROOT="${DATA_ROOT:-/data/ocr/namvt17/dataset/diarization}"
 OUT_ROOT="${OUT_ROOT:-$DATA_ROOT}"
 DSCORE_SRC="${DSCORE_SRC:-${DIAPER_ROOT}/dscore}"
 DSCORE_ENV="${DSCORE_ENV:-${DIAPER_ROOT}/dscore/.dscore}"
-LSEEND_ENV="${LSEEND_ENV:-lseend}"
+LSEEND_ENV="${LSEEND_ENV:-/data/ocr/namvt17/FS-EEND/.venv}"   # path-based, like custom-diaper/.venv
 GPUS="${GPUS:-0}"
 
 # References come from the ORIGINAL 16 kHz tree: resampling does not move any
@@ -57,6 +57,7 @@ esac
 for d in "$KALDI" "$DSCORE_SRC"; do
   [ -e "$d" ] || { echo "missing: $d" >&2; exit 1; }
 done
+[ -d "$LSEEND_ENV" ] || { echo "missing conda env: $LSEEND_ENV" >&2; echo "create it or pass LSEEND_ENV=<path>; see scripts/README.md" >&2; exit 1; }
 [ -f "$REF" ] || { echo "missing reference rttm: $REF" >&2; exit 1; }
 
 TAG="$(basename "$CKPT" .ckpt)"
@@ -64,7 +65,7 @@ OUT="results/${CORPUS}_8k/${TAG}/median${MEDIAN}"
 mkdir -p "$OUT"
 
 echo "[$(date '+%F %T')] inference: ${CORPUS}  ckpt=${CKPT}  median=${MEDIAN}"
-CUDA_VISIBLE_DEVICES="${GPUS}" conda run -n "${LSEEND_ENV}" --no-capture-output \
+CUDA_VISIBLE_DEVICES="${GPUS}" conda run -p "${LSEEND_ENV}" --no-capture-output \
     python batch_infer_kaldi.py \
       --kaldi_dir "$KALDI" --configs "conf/infer_${CORPUS}_8k.yaml" \
       --ckpt "$CKPT" --out_dir "${OUT}/rttms" --gpus 0 --median "$MEDIAN"

@@ -43,7 +43,8 @@ first:
        pyannote.metrics pyannote.core
    ```
    (~2.5 GB, almost all torch+cu117.) Then on the server:
-   `pip install --no-index --find-links wheelhouse <same package list>`.
+   `"$ENV/bin/python" -m pip install --no-index --find-links wheelhouse
+   <same package list>`.
 3. **conda-pack** is *not* an option from this laptop: the local envs are
    Windows, the server is Linux.
 
@@ -53,19 +54,27 @@ soundfile, scipy. It does not need a specific CUDA version beyond whatever
 torch was built against.
 
 ## Once
+
+The env is **path-based**, at `/data/ocr/namvt17/FS-EEND/.venv`, mirroring
+`custom-diaper/.venv`. Every script takes it as `LSEEND_ENV` and invokes it
+with `conda run -p`, so a different location only needs
+`LSEEND_ENV=<path>` in front of the command.
+
 ```bash
-conda create -n lseend python=3.9 -y
-python -m pip install "pip<24.1"                 # PL 1.8.2 has a malformed
-                                                 # dep spec that pip>=24.1 rejects
-python -m pip install torch==1.13.0+cu117 torchaudio==0.13.0+cu117 \
+ENV=/data/ocr/namvt17/FS-EEND/.venv
+conda create -p "$ENV" python=3.9 -y
+# PL 1.8.2 ships a malformed dep spec that pip >= 24.1 rejects
+"$ENV/bin/python" -m pip install "pip<24.1"
+"$ENV/bin/python" -m pip install torch==1.13.0+cu117 torchaudio==0.13.0+cu117 \
     --index-url https://download.pytorch.org/whl/cu117
-python -m pip install "numpy<2" "pytorch-lightning==1.8.2" "torchmetrics<1.0" \
-    pyyaml hyperpyyaml librosa soundfile scipy h5py pyannote.metrics pyannote.core
+"$ENV/bin/python" -m pip install "numpy<2" "pytorch-lightning==1.8.2" \
+    "torchmetrics<1.0" pyyaml hyperpyyaml librosa soundfile scipy h5py \
+    pyannote.metrics pyannote.core
 ```
 Pin `numpy<2` and `torchmetrics<1.0`, and do **not** install
 `pytorch-lightning==1.8.6`: it pulls torch 2.8 and destroys the cu117 build.
-Call the env's interpreter directly -- `conda run -n <env> python -m pip ...`
-has been seen to exit 0 while installing nothing.
+Call the env's interpreter directly, as above -- `conda run -p <env> python
+-m pip ...` has been seen to exit 0 while installing nothing.
 
 ```bash
 ./scripts/download_simu_ckpt.sh     # verify/fetch the ckpt
@@ -81,6 +90,7 @@ our own `custom-diaper/scripts/precompute_{msdwild,ramc}.sh`.
 | Var | Default | Holds |
 |---|---|---|
 | `DIAPER_ROOT` | `/data/ocr/namvt17/custom-diaper` | code only: `dscore/` and `dscore/.dscore` |
+| `LSEEND_ENV` | `/data/ocr/namvt17/FS-EEND/.venv` | this project's python env (`conda run -p`) |
 | `DATA_ROOT` | `/data/ocr/namvt17/dataset/diarization` | the 16 kHz corpora + reference RTTMs (read) |
 | `OUT_ROOT` | `$DATA_ROOT` | where the 8 kHz copies get written (~15 GB) |
 
@@ -102,7 +112,7 @@ just:
 DATA_ROOT=D:/Python/custom-diaper/database ./scripts/prepare_8k_data.sh
 ```
 
-Every script now **fails fast** on a missing data dir, reference RTTM or
+Every script now **fails fast** on a missing env, data dir, reference RTTM or
 checkpoint rather than starting and dying later. `run_finetune.sh` rewrites
 `train_data_dir`/`val_data_dir`/`init_ckpt` into a run-local copy of the
 config, so `OUT_ROOT` is the single source of truth and the config that
@@ -140,8 +150,9 @@ rttm is byte-identical to the 16 kHz dir's).
   the tail line reports `N/6 splits converted` -- check it rather than
   assuming all six ran. A `DATA_ROOT` that does not exist, or that yields zero
   splits, is a hard error.
-- Python with `numpy`, `soundfile`, `scipy` (the `lseend` env has all three;
-  pass another with `PY=/path/to/python`).
+- Python with `numpy`, `soundfile`, `scipy`. Defaults to
+  `$LSEEND_ENV/bin/python`; override with `PY=/path/to/python` (a bare name on
+  `PATH` works too).
 - **Disk: ~15 GB** (~4.6 GB MSDWild + ~10.4 GB RAMC), on top of the 29 GB of
   16 kHz sources. 3,143 + 351 = 3,494 recordings, ~216 h.
 - Time: well under an hour, single-threaded and I/O-bound (the resample itself
