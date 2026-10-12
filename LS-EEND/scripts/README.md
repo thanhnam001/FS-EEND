@@ -154,7 +154,7 @@ you finetune.
 
 ## Train, then score
 ```bash
-GPUS=0 MAX_EPOCHS=50 ./scripts/run_finetune.sh msdwild
+GPUS=0 ./scripts/run_finetune.sh msdwild
 ./scripts/run_infer_score.sh msdwild logs/finetune_msdwild_8k/version_0/<ckpt>
 ```
 Same with `ramc`. Zero-shot sanity check (no training, no `train`/`dev` data):
@@ -168,8 +168,43 @@ env, the 8 kHz data and dscore in one go, in a few minutes.
 2. **`chunk_size` in the infer config sets `max_seqlen`** and must cover the
    longest test recording, not the training chunk length. Their generic config
    (100 s) is 10x too small for MSDWild's 1320 s file and cost 0.24 DER.
-3. **Choose `max_epochs` deliberately.** Their 500 suits CALLHOME's small
-   epoch, not a 66 h / 150 h corpus. Measured 3.9 s/step at batch 4 on a 6 GB
-   card (20.5x realtime); batch 16 needs ~15.5 GB. See the COST block in each
-   finetune config, and report the budget used as a deviation from our own
-   500-epoch protocol.
+3. **The training budget is settled: theirs.** DECIDED 2026-10-12 --
+   `max_epochs: 500`, `early_stop_epoch` 200 (MSDWild, from their callhome)
+   / 500 (RAMC, from their dihard3), `lr: 1e-5`, `batch_size: 4`, all exactly
+   as the authors' configs. Our own finetune protocol is also 500 epochs, so
+   the budget is matched on both sides; it is NOT a deviation and should not
+   be caveated as one. `MAX_EPOCHS=` still exists on `run_finetune.sh` as an
+   override for short smoke tests -- do not use it for a reported run.
+
+   Know the wall-clock before starting (see "Cost" below).
+
+## Cost
+
+Their recipe at batch 4, measured per corpus. Steps/epoch is exact (audio
+hours / chunk length / batch); the per-step time is the only estimate, and it
+is from an **RTX 3060 Laptop 6 GB**, not the server.
+
+| | MSDWild | RAMC |
+|---|---|---|
+| train audio | 66.1 h | 149.6 h |
+| chunk | 20 s | 40 s |
+| audio per step (batch 4) | 80 s | 160 s |
+| steps / epoch | ~2,975 | ~3,366 |
+| measured s/step (6 GB laptop) | 3.9 | ~7.8 |
+| h / epoch (same card) | 3.2 | 7.3 |
+| **500 epochs on that card** | **~67 days** | **~152 days** |
+| earliest early stop | epoch ~201 (patience 200) | never -- patience = max_epochs |
+
+A server GPU is faster, but **by how much has not been measured** -- do not
+assume a factor. `run_finetune.sh` logs s/step; read it a few minutes in and
+multiply by the steps/epoch x 500 above before committing the machine.
+
+If that number is too large, the honest levers are, in order:
+1. **`batch_size`** -- the only one that does not touch the epoch budget.
+   Batch 4 leaves a 24 GB card mostly idle; batch 16 needs ~15.5 GB and cuts
+   steps/epoch 4x. It IS a recipe deviation (same lr at a larger batch changes
+   the optimisation), so it has to be stated if used.
+2. **MSDWild first, RAMC later.** MSDWild is 2.3x cheaper and is the corpus
+   where the 8 kHz handicap matters most, i.e. the more informative run.
+3. **Cut `max_epochs`** -- last resort, and then it genuinely is a deviation
+   from both their recipe and ours.

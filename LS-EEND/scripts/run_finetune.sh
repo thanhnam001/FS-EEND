@@ -17,16 +17,17 @@ set -o pipefail
 #   ./scripts/download_simu_ckpt.sh
 #   ./scripts/prepare_8k_data.sh
 #
-# BEFORE YOU RUN: read the COST block in conf/finetune_<corpus>_8k.yaml and
-# choose max_epochs on purpose. Their 500 is calibrated to CALLHOME's small
-# epoch; on a 66 h / 150 h corpus it is very expensive. MAX_EPOCHS here
-# rewrites that one field into a run-local copy of the config so the original
-# stays untouched and the value actually used is recorded in the log.
+# BUDGET: the authors' own, settled 2026-10-12 -- max_epochs 500, their
+# early_stop_epoch (200 MSDWild / 500 RAMC), lr 1e-5, batch_size 4. Our own
+# finetune protocol is also 500 epochs, so this is matched on both sides, not
+# a deviation. MAX_EPOCHS= below overrides it into a run-local config copy;
+# that is for smoke tests, not for a run you intend to report.
 #
-# batch_size is 16 in the config and is the main throughput lever: measured
-# ~15.5 GB at 16, so it needs a >=24 GB card. Drop to 8 or 4 on a smaller one
-# (4 fits 6 GB) -- but note 8 thrashed on a 6 GB laptop, so size the batch to
-# the card rather than splitting the difference.
+# BEFORE YOU RUN read the COST block in conf/finetune_<corpus>_8k.yaml. At
+# batch 4 this is ~2,975 steps/epoch (MSDWild) / ~3,366 (RAMC), and on a 6 GB
+# laptop that was 67 / 152 days for the full 500. The server is faster by an
+# unmeasured factor: this script logs s/step, so read it a few minutes in and
+# multiply before committing the machine.
 #
 # Lightning writes to logs/<model_name>/version_N/. Re-running starts a new
 # version rather than resuming; pass --checkpoint_resume to continue instead.
