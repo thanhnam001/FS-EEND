@@ -153,11 +153,37 @@ Inference alone only needs the `test` splits; `train`/`dev` are needed only if
 you finetune.
 
 ## Train, then score
+
 ```bash
+# 1. finetune (long -- see Cost)
 GPUS=0 ./scripts/run_finetune.sh msdwild
-./scripts/run_infer_score.sh msdwild logs/finetune_msdwild_8k/version_0/<ckpt>
+
+# 2. average the last 10 epochs, as their recipe and ours both do
+python scripts/average_ckpts.py logs/finetune_msdwild_8k/version_0     --last-n 10 -o logs/finetune_msdwild_8k/version_0/avg_last10.ckpt
+
+# 3. score that averaged checkpoint
+./scripts/run_infer_score.sh msdwild     logs/finetune_msdwild_8k/version_0/avg_last10.ckpt
 ```
-Same with `ramc`. Zero-shot sanity check (no training, no `train`/`dev` data):
+Same with `ramc`. Step 2 is not optional for a reported number: the authors
+average a window of epochs (their released model is `..._16_25_avg_model.ckpt`,
+epochs 16-25) and so does our protocol. Scoring one epoch is a different,
+noisier quantity.
+
+**Disk: `save_top_k: -1` keeps every epoch.** The model is 12.47 M params, so
+a lightning checkpoint with Adam state is ~150 MB and 500 epochs is **~75 GB
+per corpus**. Check free space before launching -- filling the disk at epoch
+400 loses the run. That setting is the authors', so it is left alone; if space
+is short, lower `save_top_k` in the config and say so.
+
+**Two upstream bugs are already fixed on this branch**, both of which only
+surface at the very end of a long run:
+- `train_dia_fintun_real.py` extracted `["state_dict"]` and then immediately
+  overwrote it with the whole lightning checkpoint, so the post-`fit()`
+  averaging died with `TypeError: unsupported operand type(s) for /: 'str'
+  and 'int'` -- after all 500 epochs had run.
+- the same file could not initialise from the released checkpoint at all
+  (legacy `dec.attractor_decoder.layers.*` key names); it now applies the
+  same remap the inference path already had. Zero-shot sanity check (no training, no `train`/`dev` data):
 `./scripts/run_infer_score.sh msdwild ./ckpt/simu/simu_1-8spk.ckpt`
 -> MSDWild 43.98 at collar 0.25, which is the expected *bad* number: the
 simulated checkpoint has never seen MSDWild. Run this first -- it exercises the

@@ -210,9 +210,18 @@ def train(configs, gpus, checkpoint_resume, test_folder=None):
     test_state = defaultdict(float)
     for c in ckpts:
         # state_dict = torch.load(test_folder + "/" + c, map_location=torch.device("cuda:{}".format(gpus[0])))["state_dict"]
-        state_dict = torch.load(test_folder + "/" + c)["state_dict"]
-        # if only model parameters are saved, load state dict directly
-        state_dict = torch.load(test_folder + "/" + c)
+        state_dict = torch.load(test_folder + "/" + c, map_location="cpu")
+        # Upstream had a second, unconditional
+        #     state_dict = torch.load(...)
+        # here, which overwrote the ["state_dict"] extraction above and fed
+        # the WHOLE lightning checkpoint into the averaging loop. That throws
+        # TypeError: unsupported operand type(s) for /: 'str' and 'int' on the
+        # 'pytorch-lightning_version' entry -- after trainer.fit() has already
+        # run, so it only surfaces at the very end of a long run. Handle both
+        # shapes instead: a lightning ckpt, or a plain weights-only dict such
+        # as the released *_avg_model.ckpt.
+        if isinstance(state_dict, dict) and "state_dict" in state_dict:
+            state_dict = state_dict["state_dict"]
         for name, param in state_dict.items():
             test_state[name] += param / len(ckpts)
 
