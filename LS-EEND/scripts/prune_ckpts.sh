@@ -27,11 +27,25 @@ YES="${2:-}"
 KEEP="${KEEP:-6}"
 WATCH="${WATCH:-0}"
 
-[ -d "$DIR" ] || { echo "no such dir: $DIR" >&2; exit 1; }
+# DIR may be a version dir, or a model dir holding version_* subdirs. In
+# WATCH mode it may not exist yet -- the runner starts this before Lightning
+# has created the log dir -- so only a one-shot run requires it up front.
+if [ ! -d "$DIR" ] && [ "${WATCH:-0}" -le 0 ]; then
+  echo "no such dir: $DIR" >&2; exit 1
+fi
 case "$KEEP" in ''|*[!0-9]*) echo "KEEP must be a non-negative integer" >&2; exit 1 ;; esac
 [ "$KEEP" -ge 1 ] || { echo "refusing KEEP=0; that would delete every checkpoint" >&2; exit 1; }
 
-prune_once () {
+# Every dir that could hold checkpoints: DIR itself plus any version_* under it.
+target_dirs () {
+  [ -d "$DIR" ] || return 0
+  find "$DIR" -maxdepth 1 -type d -name 'version_*' -print 2>/dev/null
+  printf '%s
+' "$DIR"
+}
+
+prune_dir () {
+  local DIR="$1"
   # Sort by the epoch number in the filename, not by mtime: a resumed run can
   # write an old epoch late.
   mapfile -t all < <(
@@ -39,8 +53,9 @@ prune_once () {
       | sed -E 's/^epoch=([0-9]+).*/\1 &/' | sort -n -k1,1 | cut -d' ' -f2-
   )
   local n=${#all[@]}
+  [ "$n" -gt 0 ] || return 0
   if [ "$n" -le "$KEEP" ]; then
-    echo "[$(date '+%F %T')] $n checkpoint(s), keep=$KEEP -- nothing to prune"
+    echo "[$(date '+%F %T')] ${DIR}: $n checkpoint(s), keep=$KEEP -- nothing to prune"
     return 0
   fi
   local drop=$(( n - KEEP ))
@@ -54,8 +69,15 @@ prune_once () {
     fi
     freed=$(( freed + sz ))
   done
-  echo "[$(date '+%F %T')] $n present, kept $KEEP, $( [ "$YES" = "--yes" ] && echo removed || echo 'would remove') $drop ($(( freed / 1024 / 1024 )) MB)"
+  echo "[$(date '+%F %T')] ${DIR}: $n present, kept $KEEP, $( [ "$YES" = "--yes" ] && echo removed || echo 'would remove') $drop ($(( freed / 1024 / 1024 )) MB)"
   [ "$YES" = "--yes" ] || echo "  (dry run -- re-run with --yes to actually delete)"
+}
+
+prune_once () {
+  local d
+  while IFS= read -r d; do
+    [ -n "$d" ] && prune_dir "$d"
+  done < <(target_dirs)
 }
 
 if [ "$WATCH" -gt 0 ]; then

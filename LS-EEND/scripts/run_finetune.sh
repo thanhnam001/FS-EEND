@@ -51,6 +51,24 @@ OUT_ROOT="${OUT_ROOT:-$DATA_ROOT}"
 CKPT="${CKPT:-./ckpt/simu/simu_1-8spk.ckpt}"
 mkdir -p "$LOG_DIR"
 
+# AUTO-PRUNE. save_top_k: -1 is their setting and keeps every epoch (~150 MB),
+# which is ~75 GB over 500 epochs. No config setting means "keep the last N"
+# (with a monitor set, save_top_k keeps the BEST N), so a watcher is started
+# alongside training and stopped with it. PRUNE_KEEP=0 disables.
+PRUNE_KEEP="${PRUNE_KEEP:-6}"
+PRUNE_EVERY="${PRUNE_EVERY:-600}"
+PRUNER_PID=""
+stop_pruner () {
+  if [ -n "$PRUNER_PID" ]; then kill "$PRUNER_PID" 2>/dev/null || true; wait "$PRUNER_PID" 2>/dev/null || true; PRUNER_PID=""; fi
+}
+start_pruner () {  # <model log dir> <log file>
+  [ "$PRUNE_KEEP" -gt 0 ] || return 0
+  KEEP="$PRUNE_KEEP" WATCH="$PRUNE_EVERY" ./scripts/prune_ckpts.sh "$1" --yes >> "$2" 2>&1 &
+  PRUNER_PID=$!
+  echo "  auto-prune: newest ${PRUNE_KEEP} ckpts every ${PRUNE_EVERY}s (pid ${PRUNER_PID}, log $2)"
+}
+trap stop_pruner EXIT INT TERM
+
 TRAIN_DIR="${OUT_ROOT}/${CORPUS}/kaldi_8k/train"
 VAL_DIR="${OUT_ROOT}/${CORPUS}/kaldi_8k/dev"
 for d in "$TRAIN_DIR" "$VAL_DIR"; do
@@ -79,8 +97,12 @@ echo "  batch_size: $(grep -m1 '^  batch_size:' "$RUN_CONFIG" | tr -s ' ' | cut 
 echo "  CUDA_VISIBLE_DEVICES=${GPUS}"
 echo "=================================================================="
 
+start_pruner "logs/finetune_${CORPUS}_8k" "${LOG_DIR}/prune_${CORPUS}.log"
+
 CUDA_VISIBLE_DEVICES="${GPUS}" conda run -p "${LSEEND_ENV}" --no-capture-output \
     python train_dia_fintun_real.py --configs "${RUN_CONFIG}" --gpus 0, \
     2>&1 | tee "${LOG_DIR}/finetune_${CORPUS}.log"
+
+stop_pruner
 
 echo "[$(date '+%F %T')] finished. Next: ./scripts/run_infer_score.sh ${CORPUS} <ckpt>"

@@ -58,6 +58,24 @@ for d in "${OUT_ROOT}/ramc/kaldi_8k/train" "${OUT_ROOT}/ramc/kaldi_8k/dev"; do
 done
 mkdir -p "$LOG_DIR"
 
+# AUTO-PRUNE. save_top_k: -1 is their setting and keeps every epoch (~150 MB),
+# which is ~75 GB over 500 epochs. No config setting means "keep the last N"
+# (with a monitor set, save_top_k keeps the BEST N), so a watcher is started
+# alongside training and stopped with it. PRUNE_KEEP=0 disables.
+PRUNE_KEEP="${PRUNE_KEEP:-6}"
+PRUNE_EVERY="${PRUNE_EVERY:-600}"
+PRUNER_PID=""
+stop_pruner () {
+  if [ -n "$PRUNER_PID" ]; then kill "$PRUNER_PID" 2>/dev/null || true; wait "$PRUNER_PID" 2>/dev/null || true; PRUNER_PID=""; fi
+}
+start_pruner () {  # <model log dir> <log file>
+  [ "$PRUNE_KEEP" -gt 0 ] || return 0
+  KEEP="$PRUNE_KEEP" WATCH="$PRUNE_EVERY" ./scripts/prune_ckpts.sh "$1" --yes >> "$2" 2>&1 &
+  PRUNER_PID=$!
+  echo "  auto-prune: newest ${PRUNE_KEEP} ckpts every ${PRUNE_EVERY}s (pid ${PRUNER_PID}, log $2)"
+}
+trap stop_pruner EXIT INT TERM
+
 PY="${LSEEND_ENV}/bin/python"
 read -r -a stage_arr <<< "$STAGES"
 read -r -a all_arr <<< "$ALL_STAGES"
@@ -113,9 +131,14 @@ for secs in "${stage_arr[@]}"; do
   echo "  config: ${run_config}"
   echo "=================================================================="
 
+  start_pruner "logs/${name}" "${LOG_DIR}/prune_ramc.log"
+
   CUDA_VISIBLE_DEVICES="${GPUS}" conda run -p "${LSEEND_ENV}" --no-capture-output \
       "$PY" train_dia_fintun_real.py --configs "${run_config}" --gpus 0, \
       2>&1 | tee "${LOG_DIR}/${name}.log"
+
+  # Stop before averaging so the pruner cannot delete a file mid-read.
+  stop_pruner
 
   # Newest version dir Lightning just wrote for this stage.
   vdir="$(find "logs/${name}" -maxdepth 1 -type d -name 'version_*' -printf '%T@ %p\n' \

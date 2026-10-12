@@ -249,10 +249,31 @@ i.e. 20 s chunks rather than 200 s, so its realtime factor is not usable.
 `run_finetune.sh` and the progressive runner both log s/step: read it a few
 minutes in and multiply by the steps/epoch above.
 
-**Disk.** `save_top_k: -1` is their setting and keeps every epoch (~150 MB).
-RAMC's 40 epochs are fine (~6 GB). MSDWild's 500 are not (~75 GB) -- run
-`scripts/prune_ckpts.sh` alongside it, which is safe against a live job:
+**Disk is capped automatically.** `save_top_k: -1` is their setting and keeps
+every epoch (~150 MB), which is ~75 GB over MSDWild's 500. No config setting
+expresses "keep the last N" -- with a monitor set, `save_top_k` keeps the
+*best* N, and with `monitor: null` Lightning only allows -1/0/1
+(`model_checkpoint.py:413-419`) -- so both runners start a pruning watcher
+alongside training and stop it with the run:
+
+| var | default | meaning |
+|---|---|---|
+| `PRUNE_KEEP` | 6 | newest checkpoints kept per version dir; **0 disables** |
+| `PRUNE_EVERY` | 600 | seconds between sweeps |
+
+6 = the 5 the averaging window needs plus one margin, so a checkpoint being
+written right now is never the one removed. `last.ckpt` and `avg_*.ckpt` are
+never candidates. That takes MSDWild from ~75 GB to ~900 MB; RAMC's 40 epochs
+would fit anyway. Progress goes to `logs/runs/prune_<corpus>.log`, and the
+watcher is stopped before each averaging step so it cannot delete a file
+mid-read.
+
+To cap an **already-running** job that was started before this existed, or to
+prune by hand:
 
 ```bash
-KEEP=6 WATCH=600 ./scripts/prune_ckpts.sh logs/finetune_msdwild_8k/version_0 --yes
+KEEP=6 ./scripts/prune_ckpts.sh logs/finetune_msdwild_8k            # dry run
+KEEP=6 WATCH=600 ./scripts/prune_ckpts.sh logs/finetune_msdwild_8k --yes
 ```
+It accepts either a version dir or the model dir above it, and is safe against
+a live run -- Lightning does not read old checkpoints back during training.
