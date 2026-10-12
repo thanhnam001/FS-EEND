@@ -59,7 +59,7 @@ data:
   context_recp: 7
   label_delay: 0  # number of frames delayed from original labels for uni-directional rnn to see in the future
   feat_type: logmel23_cummn # ['', 'log', 'logmel', 'logmel23', 'logmel23_mn', 'logmel23_mvn', 'logmel23_swn']
-  chunk_size: 140000
+  chunk_size: 13500   # 1350 s; longest MSDWild test file is 1320.5 s (0.1 s units)
   chunk_step: 10000
   val_chunk_size: 140000
   val_chunk_step: 140000

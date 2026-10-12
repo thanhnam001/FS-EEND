@@ -165,83 +165,94 @@ you finetune.
 
 ## Train, then score
 
+**MSDWild** -- single stage, their CALLHOME recipe:
 ```bash
-# 1. finetune (long -- see Cost)
 GPUS=0 ./scripts/run_finetune.sh msdwild
-
-# 2. average the last 10 epochs, as their recipe and ours both do
-python scripts/average_ckpts.py logs/finetune_msdwild_8k/version_0     --last-n 10 -o logs/finetune_msdwild_8k/version_0/avg_last10.ckpt
-
-# 3. score that averaged checkpoint
-./scripts/run_infer_score.sh msdwild     logs/finetune_msdwild_8k/version_0/avg_last10.ckpt
+/data/ocr/namvt17/FS-EEND/.venv/bin/python scripts/average_ckpts.py     logs/finetune_msdwild_8k/version_0 --last-n 5     -o logs/finetune_msdwild_8k/version_0/avg_last5.ckpt
+./scripts/run_infer_score.sh msdwild logs/finetune_msdwild_8k/version_0/avg_last5.ckpt
 ```
-Same with `ramc`. Step 2 is not optional for a reported number: the authors
-average a window of epochs (their released model is `..._16_25_avg_model.ckpt`,
-epochs 16-25) and so does our protocol. Scoring one epoch is a different,
-noisier quantity.
 
-**Disk: `save_top_k: -1` keeps every epoch.** The model is 12.47 M params, so
-a lightning checkpoint with Adam state is ~150 MB and 500 epochs is **~75 GB
-per corpus**. Check free space before launching -- filling the disk at epoch
-400 loses the run. That setting is the authors', so it is left alone; if space
-is short, lower `save_top_k` in the config and say so.
+**RAMC** -- four progressive stages, their AMI recipe. The runner chains the
+stages, averages last-5 after each, and feeds that into the next:
+```bash
+GPUS=0 ./scripts/run_finetune_ramc_progressive.sh
+./scripts/run_infer_score.sh ramc logs/finetune_ramc_8k_s4_1600s/avg_last5.ckpt
+```
+Resumable: a completed stage is skipped, and `STAGES="800 1600"` restarts from
+part-way (stage numbers stay canonical, and it refuses to start if the previous
+stage's output is missing). Batch sizes default to `8 8 4 2`; the authors use 8
+throughout on AMI but report hitting GPU memory at the longest lengths, so
+override with `BATCHES="8 8 8 8"` on a large card and record which you used.
 
-**Two upstream bugs are already fixed on this branch**, both of which only
-surface at the very end of a long run:
-- `train_dia_fintun_real.py` extracted `["state_dict"]` and then immediately
-  overwrote it with the whole lightning checkpoint, so the post-`fit()`
-  averaging died with `TypeError: unsupported operand type(s) for /: 'str'
-  and 'int'` -- after all 500 epochs had run.
-- the same file could not initialise from the released checkpoint at all
-  (legacy `dec.attractor_decoder.layers.*` key names); it now applies the
-  same remap the inference path already had. Zero-shot sanity check (no training, no `train`/`dev` data):
+Zero-shot sanity check (no training, only the `test` split):
 `./scripts/run_infer_score.sh msdwild ./ckpt/simu/simu_1-8spk.ckpt`
--> MSDWild 43.98 at collar 0.25, which is the expected *bad* number: the
-simulated checkpoint has never seen MSDWild. Run this first -- it exercises the
-env, the 8 kHz data and dscore in one go, in a few minutes.
+-> MSDWild 43.98 at collar 0.25, the expected *bad* number. Run it first; it
+exercises env, 8 kHz data and dscore in a few minutes.
 
 ## Three things that are easy to get wrong
-1. **8 kHz is mandatory.** See `prepare_8k_data.sh` above.
-2. **`chunk_size` in the infer config sets `max_seqlen`** and must cover the
-   longest test recording, not the training chunk length. Their generic config
-   (100 s) is 10x too small for MSDWild's 1320 s file and cost 0.24 DER.
-3. **The training budget is settled: theirs.** DECIDED 2026-10-12 --
-   `max_epochs: 500`, `early_stop_epoch` 200 (MSDWild, from their callhome)
-   / 500 (RAMC, from their dihard3), `lr: 1e-5`, `batch_size: 4`, all exactly
-   as the authors' configs. Our own finetune protocol is also 500 epochs, so
-   the budget is matched on both sides; it is NOT a deviation and should not
-   be caveated as one. `MAX_EPOCHS=` still exists on `run_finetune.sh` as an
-   override for short smoke tests -- do not use it for a reported run.
 
-   Know the wall-clock before starting (see "Cost" below).
+1. **8 kHz is mandatory**, not a choice -- see `prepare_8k_data.sh` above. Say
+   so in any comparison: near-lossless for RAMC, a real handicap on MSDWild.
+2. **`chunk_size` is in 0.1 s units**, at training *and* inference. At
+   inference it sets `max_seqlen` and must cover the longest test recording,
+   not the training chunk length. Their generic infer config (10000 = 1000 s)
+   is too small for MSDWild's 1320 s file and cost 0.24 DER.
+3. **Budget and schedule are corpus-dependent.** See "Recipe mapping" below:
+   MSDWild takes their CALLHOME recipe, RAMC their AMI one. Do not copy one
+   corpus's `max_epochs` onto the other.
+
+## Recipe mapping (read this before changing a config)
+
+The paper sets the adaptation audio length by the corpus's **average recording
+duration**: "Audio length is increased from 200 s until it approximates the
+average recording duration of each dataset" (Sec. IV-C), giving 200 s for
+CALLHOME, 200->400 for DIHARD II/III, 200->400->800->1600 for AMI. Applying
+that rule to our measured averages:
+
+| corpus | avg recording | matches their | schedule | epochs |
+|---|---|---|---|---|
+| MSDWild | 96 s | CALLHOME (126 s) | 200 s, single step | 500, patience 200 |
+| RAMC | 1864 s (31.1 min) | AMI (35.6 min) | 200 -> 400 -> 800 -> 1600 s | 10 per stage, 40 total |
+
+`chunk_size` is in **subsampled frames**: hop 80 @ 8 kHz = 10 ms, subsampling
+10, so one unit is **0.1 s** and `chunk_size: 2000` = 200 s. That is what makes
+their callhome 2000 / dihard3 4000 reproduce the paper's 200 s / 400 s. The
+same units apply at inference, where `chunk_size` sets `max_seqlen` and must
+cover the longest test recording: MSDWild 1320.5 s -> 13500, RAMC 1956.1 s ->
+20000.
+
+The paper gives epoch counts only for pre-training (Sim2spk / Sim{1-4} /
+Sim{1-6} / Sim{1-8} for 100 / 50 / 50 / 25 epochs). Adaptation epoch counts and
+the checkpoint-averaging windows exist only in the configs.
+
+**Averaging window: last 5.** Their `*_infer.yaml` files record which epochs
+were averaged for each published result -- callhome 416-420, dihard2 140-144,
+dihard3 113-117, ami 1-9 -- i.e. the last 5 for real-data finetunes (last 10
+for simulated steps; the released `simu_1-8spk` is `..._16_25_avg`, epochs
+16-25 of a 25-epoch step).
 
 ## Cost
 
-Their recipe at batch 4, measured per corpus. Steps/epoch is exact (audio
-hours / chunk length / batch); the per-step time is the only estimate, and it
-is from an **RTX 3060 Laptop 6 GB**, not the server.
+Steps per epoch is exact: audio / chunk length / batch.
 
 | | MSDWild | RAMC |
 |---|---|---|
 | train audio | 66.1 h | 149.6 h |
-| chunk | 20 s | 40 s |
-| audio per step (batch 4) | 80 s | 160 s |
-| steps / epoch | ~2,975 | ~3,366 |
-| measured s/step (6 GB laptop) | 3.9 | ~7.8 |
-| h / epoch (same card) | 3.2 | 7.3 |
-| **500 epochs on that card** | **~67 days** | **~152 days** |
-| earliest early stop | epoch ~201 (patience 200) | never -- patience = max_epochs |
+| chunk | 200 s | 200 / 400 / 800 / 1600 s |
+| batch | 4 | 8 / 8 / 4 / 2 |
+| steps per epoch | ~297 | ~337 / 168 / 168 / 168 |
+| epochs | 500 | 10 per stage, 40 total |
 
-A server GPU is faster, but **by how much has not been measured** -- do not
-assume a factor. `run_finetune.sh` logs s/step; read it a few minutes in and
-multiply by the steps/epoch x 500 above before committing the machine.
+**Wall-clock has to be measured on the server.** An earlier estimate in this
+repo (67 / 152 days) was derived assuming `chunk_size` was in raw 10 ms frames,
+i.e. 20 s chunks rather than 200 s, so its realtime factor is not usable.
+`run_finetune.sh` and the progressive runner both log s/step: read it a few
+minutes in and multiply by the steps/epoch above.
 
-If that number is too large, the honest levers are, in order:
-1. **`batch_size`** -- the only one that does not touch the epoch budget.
-   Batch 4 leaves a 24 GB card mostly idle; batch 16 needs ~15.5 GB and cuts
-   steps/epoch 4x. It IS a recipe deviation (same lr at a larger batch changes
-   the optimisation), so it has to be stated if used.
-2. **MSDWild first, RAMC later.** MSDWild is 2.3x cheaper and is the corpus
-   where the 8 kHz handicap matters most, i.e. the more informative run.
-3. **Cut `max_epochs`** -- last resort, and then it genuinely is a deviation
-   from both their recipe and ours.
+**Disk.** `save_top_k: -1` is their setting and keeps every epoch (~150 MB).
+RAMC's 40 epochs are fine (~6 GB). MSDWild's 500 are not (~75 GB) -- run
+`scripts/prune_ckpts.sh` alongside it, which is safe against a live job:
+
+```bash
+KEEP=6 WATCH=600 ./scripts/prune_ckpts.sh logs/finetune_msdwild_8k/version_0 --yes
+```

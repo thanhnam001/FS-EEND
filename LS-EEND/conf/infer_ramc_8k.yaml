@@ -55,11 +55,11 @@ model:
   
 data:
   num_speakers:
-  max_speakers: 10 
+  max_speakers: 3    # RAMC: 2 real speakers + G00000000; must match the finetune config
   context_recp: 7
   label_delay: 0  # number of frames delayed from original labels for uni-directional rnn to see in the future
   feat_type: logmel23_cummn # ['', 'log', 'logmel', 'logmel23', 'logmel23_mn', 'logmel23_mvn', 'logmel23_swn']
-  chunk_size: 200000
+  chunk_size: 20000   # 2000 s; longest RAMC test file is 1956.1 s (0.1 s units)
   chunk_step: 100000
   val_chunk_size: 200000
   val_chunk_step: 200000

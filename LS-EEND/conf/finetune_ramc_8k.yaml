@@ -1,45 +1,36 @@
-# LS-EEND finetune on RAMC, initialised from the authors' released
-# phase-1 simulated checkpoint (1-8 speakers). Derived from their own
-# dihard3 config so every field keeps their meaning; only the data dirs,
-# init_ckpt and model_name are changed.
+# LS-EEND progressive finetune on RAMC -- STAGE TEMPLATE.
 #
-# 8 kHz IS MANDATORY HERE, not a choice. The released checkpoint's
-# input_projection is (256, 345) = 23 mels x 15 context, and
-# datasets/feature.py hard-wires logmel23_cummn to sr=8000 and never
-# resamples. Our own pipeline is 40 mels at 16 kHz (= 600), so these weights
-# cannot accept our features. Build the inputs with scripts/prepare_8k_data.sh.
-# Near-lossless for RAMC (telephony); a real handicap on MSDWild (wideband).
+# Derived from the authors' AMI config, NOT their dihard3 one. The paper's
+# rule (Sec. IV-C) is: "Audio length is increased from 200 s until it
+# approximates the average recording duration of each dataset", and RAMC's
+# average recording is 31.1 min (measured) against AMI's 35.6 min. So RAMC
+# takes AMI's schedule -- 200 -> 400 -> 800 -> 1600 s -- not DIHARD3's single
+# 400 s step. Fig. 3 of the paper shows skipping steps costs real DER
+# (400s->1600s "has a prominent performance decrease").
 #
-# SCORING CONVENTION for this corpus: collar 0, NO median filtering (median 1 at inference)
+# chunk_size is in SUBSAMPLED frames: hop 80 @ 8 kHz = 10 ms, subsampling 10,
+# so one unit is 0.1 s and chunk_size 2000 = 200 s. (This is what makes their
+# callhome 2000 / dihard3 4000 line up with the paper's 200 s / 400 s.)
 #
-# TRAINING BUDGET -- the authors' own, chosen deliberately (2026-10-12).
-# max_epochs 500, early_stop_epoch 500, lr 1e-5, batch_size 4: all exactly as
-# their dihard3 config. Our own finetune protocol is also 500 epochs, so this
-# budget is matched on BOTH sides and needs no "deviation" caveat. The only
-# fields that differ from their dihard3 config are the data dirs, init_ckpt
-# and model_name.
+# scripts/run_finetune_ramc_progressive.sh rewrites per stage:
+#   chunk_size, chunk_step, init_ckpt, model_name, batch_size
+# so this file holds the stage-1 (200 s) values. Do not run it directly.
 #
-# COST, so the wall-clock is not a surprise:
-#   RAMC train = 149.6 audio-hours, 40 s chunks, batch 4 = 160 s audio/step
-#   -> ~3,366 steps/epoch
-#   Measured on an RTX 3060 Laptop 6 GB: 3.9 s/step at the 20 s chunk, so
-#   ~7.8 s/step at 40 s -> 7.3 h/epoch, and 500 epochs ~= 152 days ON THAT
-#   CARD. This is the expensive one: RAMC is 2.3x MSDWild's audio and uses
-#   chunks twice as long.
-# A server GPU is faster, but by how much has NOT been measured -- do not
-# guess it. run_finetune.sh logs s/step: read it after the first few minutes
-# and multiply by 3,366 x 500 before committing the machine.
-# NOTE early_stop_epoch is 500 here (their dihard3 value), i.e. equal to
-# max_epochs, so early stopping can never fire -- this budget WILL run to
-# completion. The MSDWild config inherits their callhome value of 200.
-# batch_size is the throughput lever and does NOT change the epoch budget:
-# batch 4 leaves a 24 GB card mostly idle, batch 16 needs ~15.5 GB and cuts
-# steps/epoch 4x. Raising it is a deviation from their recipe (same lr at a
-# larger batch changes the optimisation), so it is left at their 4.
+# max_speakers 3: RAMC has exactly 2 real speakers in every recording plus
+# G00000000 in 286/289 training files, and we train on the same labels our
+# own DiaPer systems do, so the label space is 3. The paper sets S to the
+# maximum number appearing in the training set. Scoring still excludes
+# G00000000 -- that is a scoring convention, not a training one.
 #
-# Run: ./scripts/run_finetune.sh ramc
+# BUDGET: their AMI values, 10 epochs per stage = 40 total. That is ~12x
+# cheaper than the 500 this file used to carry (inherited from dihard3), and
+# it is what the authors actually ran for an AMI-sized corpus.
+#
+# SCORING CONVENTION for this corpus: collar 0, NO median filtering (median 1)
+#
+# Run: ./scripts/run_finetune_ramc_progressive.sh
 log:
-  model_name: finetune_ramc_8k
+  model_name: finetune_ramc_8k_s1_200s
   log_dir: !ref ./logs/<log[model_name]>
   save_top_k: -1
   start_epoch: 90
@@ -47,12 +38,12 @@ log:
   save_avg_path: # !ref /mnt/home/liangdi/projects/pl_version/pl_eend/logs/spk_onl_tfm_enc_dec_10w/version_7/<model[arch]>_2spk_90_100_avg_model.ckpt
 
 training:
-  batch_size: 4
+  batch_size: 8
   n_workers: 8
   shuffle: True
   lr: 1.0e-05
   opt: adam                   # [adam, sgd, noam]
-  max_epochs: 500
+  max_epochs: 10
   grad_clip: 5
   grad_accm: 1
   scheduler:
@@ -67,7 +58,7 @@ training:
 
 
 model:
-  arch: onlineConformerDA_cummn_retention_emb1dcnn_linear_nonautoreg_l2norm_on_the_fly_lsa_padspk_before_loss2
+  arch: onlineConformerDA_cummn_retention_emb1dcnn_linear_nonautoreg_l2norm_pit
   params:
     n_units: 256
     n_heads: 4
@@ -85,14 +76,14 @@ model:
   
 data:
   num_speakers:
-  max_speakers: 10 
+  max_speakers: 3
   context_recp: 7
   label_delay: 0  # number of frames delayed from original labels for uni-directional rnn to see in the future
   feat_type: logmel23_cummn # ['', 'log', 'logmel', 'logmel23', 'logmel23_mn', 'logmel23_mvn', 'logmel23_swn']
-  chunk_size: 4000
-  chunk_step: 4000
-  val_chunk_size: 16000
-  val_chunk_step: 4000
+  chunk_size: 2000
+  chunk_step: 2000
+  val_chunk_size: 100000
+  val_chunk_step: 100000
   subsampling: 10
   use_last_samples: True
   shuffle: False
@@ -110,8 +101,8 @@ data:
     normtype: minmax # minmax or standard or mean normalization
     dims: [1, 2] # dimensions over which normalization is applied
 
-  train_data_dir: /data/ocr/namvt17/dataset/diarization/ramc/kaldi_8k/train  # default; run_finetune.sh rewrites this from OUT_ROOT
-  val_data_dir: /data/ocr/namvt17/dataset/diarization/ramc/kaldi_8k/dev  # default; run_finetune.sh rewrites this from OUT_ROOT
+  train_data_dir: /data/ocr/namvt17/dataset/diarization/ramc/kaldi_8k/train
+  val_data_dir: /data/ocr/namvt17/dataset/diarization/ramc/kaldi_8k/dev
 
 task:
   max_speakers: 
