@@ -15,26 +15,57 @@ set -e
 # and the scoring reference is unchanged (verified locally: durations match to
 # <1 ms and the copied rttm is byte-identical to the 16 kHz dir's).
 #
-# Run from the LS-EEND dir on the server:
-#   DIAPER_ROOT=/data/ocr/namvt17/custom-diaper ./scripts/prepare_8k_data.sh
+# PATHS. On the server the corpora do NOT live under the repo -- they are in
+# their own tree, which is what DATA_ROOT points at. Taken from our own
+# scripts/precompute_{msdwild,ramc}.sh in custom-diaper, which read
+#   $DATA_ROOT/msdwild/kaldi/{train,dev,test}   $DATA_ROOT/msdwild_wavs
+#   $DATA_ROOT/ramc/kaldi/{train,dev,test}      $DATA_ROOT/ramc/MDT2021S003/WAV
+# and write their precompute caches into the same tree, so it is writable.
+# Locally that same structure sits under custom-diaper/database, so a local
+# dev run just overrides DATA_ROOT.
+#
+#   # server (defaults are already the server's paths):
+#   ./scripts/prepare_8k_data.sh
+#   # local dev:
+#   DATA_ROOT=D:/Python/custom-diaper/database ./scripts/prepare_8k_data.sh
+#   # 8 kHz output somewhere else (e.g. a bigger disk):
+#   OUT_ROOT=/data/ocr/namvt17/dataset/diarization_8k ./scripts/prepare_8k_data.sh
+#
 # Idempotent: already-converted wavs are skipped, so re-running is cheap.
 
-DIAPER_ROOT="${DIAPER_ROOT:-/data/ocr/namvt17/custom-diaper}"
+DATA_ROOT="${DATA_ROOT:-/data/ocr/namvt17/dataset/diarization}"
+OUT_ROOT="${OUT_ROOT:-$DATA_ROOT}"
 PY="${PY:-python}"
-DB="${DIAPER_ROOT}/database"
 
+if [ ! -d "$DATA_ROOT" ]; then
+  echo "DATA_ROOT does not exist: $DATA_ROOT" >&2
+  echo "Point it at the tree holding msdwild/ and ramc/ (see header)." >&2
+  exit 1
+fi
+
+echo "DATA_ROOT=$DATA_ROOT"
+echo "OUT_ROOT=$OUT_ROOT"
+
+found=0
 for corpus in msdwild ramc; do
   for split in train dev test; do
-    src="${DB}/${corpus}/kaldi/${split}"
-    out="${DB}/${corpus}/kaldi_8k/${split}"
-    wavdir="${DB}/${corpus}_wavs_8k"
+    src="${DATA_ROOT}/${corpus}/kaldi/${split}"
+    out="${OUT_ROOT}/${corpus}/kaldi_8k/${split}"
+    wavdir="${OUT_ROOT}/${corpus}_wavs_8k"
     if [ ! -d "$src" ]; then
       echo "[skip] no such dir: $src"
       continue
     fi
+    found=$((found + 1))
     echo "[$(date '+%F %T')] ${corpus}/${split}: ${src} -> ${out}"
     "$PY" scripts/make_8k_kaldi.py "$src" "$out" "$wavdir"
   done
 done
 
-echo "[$(date '+%F %T')] done. Disk: expect ~4.6 GB (MSDWild) + ~10.4 GB (RAMC)."
+if [ "$found" -eq 0 ]; then
+  echo "NOTHING WAS CONVERTED: no <corpus>/kaldi/<split> dirs found under $DATA_ROOT" >&2
+  exit 1
+fi
+
+echo "[$(date '+%F %T')] done, ${found}/6 splits converted."
+echo "Disk: expect ~4.6 GB (MSDWild) + ~10.4 GB (RAMC) under ${OUT_ROOT}."

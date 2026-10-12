@@ -1,5 +1,9 @@
 #!/bin/bash
 set -e
+# pipefail matters here: the training/inference command is piped into
+# tee, and without it a crash inside conda run is masked and the script
+# prints "finished" and exits 0.
+set -o pipefail
 
 # Inference + dscore scoring for LS-EEND on MSDWild or RAMC, under OUR
 # scoring protocol so the number is directly comparable to our own systems.
@@ -29,18 +33,31 @@ set -e
 CORPUS="${1:?usage: run_infer_score.sh <msdwild|ramc> <ckpt>}"
 CKPT="${2:?usage: run_infer_score.sh <msdwild|ramc> <ckpt>}"
 
+# DIAPER_ROOT is CODE only (dscore + its env). The corpora live in their own
+# tree -- DATA_ROOT -- and the 8 kHz copies prepare_8k_data.sh made are under
+# OUT_ROOT. Defaults are the server's real paths, taken from our own
+# custom-diaper/scripts/precompute_{msdwild,ramc}.sh.
 DIAPER_ROOT="${DIAPER_ROOT:-/data/ocr/namvt17/custom-diaper}"
+DATA_ROOT="${DATA_ROOT:-/data/ocr/namvt17/dataset/diarization}"
+OUT_ROOT="${OUT_ROOT:-$DATA_ROOT}"
 DSCORE_SRC="${DSCORE_SRC:-${DIAPER_ROOT}/dscore}"
 DSCORE_ENV="${DSCORE_ENV:-${DIAPER_ROOT}/dscore/.dscore}"
 LSEEND_ENV="${LSEEND_ENV:-lseend}"
 GPUS="${GPUS:-0}"
-DB="${DIAPER_ROOT}/database"
 
+# References come from the ORIGINAL 16 kHz tree: resampling does not move any
+# timestamp, so the reference is identical and we score against the one our
+# own systems are scored against.
 case "$CORPUS" in
-  msdwild) MEDIAN=11; KALDI="${DB}/msdwild/kaldi_8k/test"; REF="${DB}/msdwild/rttms/few.val.rttm"; COLLAR="--collar 0.25" ;;
-  ramc)    MEDIAN=1;  KALDI="${DB}/ramc/kaldi_8k/test";    REF="${DB}/ramc/kaldi/test/rttm";       COLLAR="" ;;
+  msdwild) MEDIAN=11; KALDI="${OUT_ROOT}/msdwild/kaldi_8k/test"; REF="${DATA_ROOT}/msdwild/rttms/few.val.rttm"; COLLAR="--collar 0.25" ;;
+  ramc)    MEDIAN=1;  KALDI="${OUT_ROOT}/ramc/kaldi_8k/test";    REF="${DATA_ROOT}/ramc/kaldi/test/rttm";       COLLAR="" ;;
   *) echo "corpus must be msdwild or ramc" >&2; exit 1 ;;
 esac
+
+for d in "$KALDI" "$DSCORE_SRC"; do
+  [ -e "$d" ] || { echo "missing: $d" >&2; exit 1; }
+done
+[ -f "$REF" ] || { echo "missing reference rttm: $REF" >&2; exit 1; }
 
 TAG="$(basename "$CKPT" .ckpt)"
 OUT="results/${CORPUS}_8k/${TAG}/median${MEDIAN}"

@@ -9,7 +9,7 @@ one script per stage, dscore for scoring.
 |---|---|
 | `download_simu_ckpt.sh` | only if the ckpt is missing -- **copy it in instead**, see below |
 | conda env creation | **yes** -- the one real blocker; see "Offline env" |
-| `prepare_8k_data.sh` | no |
+| `prepare_8k_data.sh` | no (but needs `DATA_ROOT`, see Paths) |
 | `run_finetune.sh` / `run_infer_score.sh` | no |
 
 ### Checkpoint, offline
@@ -68,9 +68,45 @@ Call the env's interpreter directly -- `conda run -n <env> python -m pip ...`
 has been seen to exit 0 while installing nothing.
 
 ```bash
-./scripts/download_simu_ckpt.sh                       # verify/fetch the ckpt
-DIAPER_ROOT=/data/ocr/namvt17/custom-diaper ./scripts/prepare_8k_data.sh
+./scripts/download_simu_ckpt.sh     # verify/fetch the ckpt
+./scripts/prepare_8k_data.sh        # defaults are already the server's paths
 ```
+
+## Paths
+
+Three roots, deliberately separate, because on the server the corpora do **not**
+live under the repo. The defaults below are the server's real paths, taken from
+our own `custom-diaper/scripts/precompute_{msdwild,ramc}.sh`.
+
+| Var | Default | Holds |
+|---|---|---|
+| `DIAPER_ROOT` | `/data/ocr/namvt17/custom-diaper` | code only: `dscore/` and `dscore/.dscore` |
+| `DATA_ROOT` | `/data/ocr/namvt17/dataset/diarization` | the 16 kHz corpora + reference RTTMs (read) |
+| `OUT_ROOT` | `$DATA_ROOT` | where the 8 kHz copies get written (~15 GB) |
+
+Under `DATA_ROOT` the scripts expect exactly the layout our precompute scripts
+already use:
+```
+msdwild/kaldi/{train,dev,test}      msdwild_wavs/
+msdwild/rttms/few.val.rttm
+ramc/kaldi/{train,dev,test}         ramc/MDT2021S003/WAV/
+```
+and they write `<corpus>/kaldi_8k/<split>/` + `<corpus>_wavs_8k/` under
+`OUT_ROOT`. That tree is writable on the server -- our precompute caches are
+already written there -- so `OUT_ROOT` only needs overriding to put 15 GB on a
+different disk.
+
+Locally the same structure sits under `custom-diaper/database`, so a dev run is
+just:
+```bash
+DATA_ROOT=D:/Python/custom-diaper/database ./scripts/prepare_8k_data.sh
+```
+
+Every script now **fails fast** on a missing data dir, reference RTTM or
+checkpoint rather than starting and dying later. `run_finetune.sh` rewrites
+`train_data_dir`/`val_data_dir`/`init_ckpt` into a run-local copy of the
+config, so `OUT_ROOT` is the single source of truth and the config that
+actually ran is saved next to the log.
 
 ## `prepare_8k_data.sh` -- what it is
 
@@ -87,9 +123,9 @@ stated in any comparison: near-lossless for RAMC (telephony, 8 kHz content
 anyway) but a real handicap on MSDWild (wideband, in-the-wild video).
 
 **What it produces**, for each of `{msdwild, ramc}` x `{train, dev, test}`:
-- `$DB/<corpus>_wavs_8k/<recid>.wav` -- mono PCM_16 at 8 kHz
+- `$OUT_ROOT/<corpus>_wavs_8k/<recid>.wav` -- mono PCM_16 at 8 kHz
   (`scipy.signal.resample_poly`)
-- `$DB/<corpus>/kaldi_8k/<split>/` -- `wav.scp` rewritten to absolute paths
+- `$OUT_ROOT/<corpus>/kaldi_8k/<split>/` -- `wav.scp` rewritten to absolute paths
   into the above; `segments`, `utt2spk`, `spk2utt`, `rttm`, `reco2dur`,
   `reco2num_spk`, `utt2dur`, `text` copied **verbatim**
 
@@ -99,9 +135,11 @@ rttm is byte-identical to the 16 kHz dir's).
 
 **Requirements**
 - No network.
-- `$DIAPER_ROOT/database/{msdwild,ramc}/kaldi/{train,dev,test}` must exist with
-  the 16 kHz audio they reference. A missing split is skipped with `[skip]`,
-  not an error -- check the log rather than assuming all six ran.
+- `$DATA_ROOT/{msdwild,ramc}/kaldi/{train,dev,test}` must exist with the
+  16 kHz audio they reference. A missing split is skipped with `[skip]`, and
+  the tail line reports `N/6 splits converted` -- check it rather than
+  assuming all six ran. A `DATA_ROOT` that does not exist, or that yields zero
+  splits, is a hard error.
 - Python with `numpy`, `soundfile`, `scipy` (the `lseend` env has all three;
   pass another with `PY=/path/to/python`).
 - **Disk: ~15 GB** (~4.6 GB MSDWild + ~10.4 GB RAMC), on top of the 29 GB of

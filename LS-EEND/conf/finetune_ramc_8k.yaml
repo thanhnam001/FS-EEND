@@ -98,8 +98,8 @@ data:
     normtype: minmax # minmax or standard or mean normalization
     dims: [1, 2] # dimensions over which normalization is applied
 
-  train_data_dir: /data/ocr/namvt17/custom-diaper/database/ramc/kaldi_8k/train
-  val_data_dir: /data/ocr/namvt17/custom-diaper/database/ramc/kaldi_8k/dev
+  train_data_dir: /data/ocr/namvt17/dataset/diarization/ramc/kaldi_8k/train  # default; run_finetune.sh rewrites this from OUT_ROOT
+  val_data_dir: /data/ocr/namvt17/dataset/diarization/ramc/kaldi_8k/dev  # default; run_finetune.sh rewrites this from OUT_ROOT
 
 task:
   max_speakers: 
