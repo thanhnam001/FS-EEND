@@ -32,10 +32,17 @@ set -o pipefail
 # Lightning writes to logs/<model_name>/version_N/. Re-running starts a new
 # version rather than resuming; pass --checkpoint_resume to continue instead.
 
-CORPUS="${1:?usage: run_finetune.sh <msdwild|ramc>}"
+CORPUS="${1:?usage: run_finetune.sh <msdwild>}"
 case "$CORPUS" in
-  msdwild|ramc) ;;
-  *) echo "corpus must be msdwild or ramc" >&2; exit 1 ;;
+  msdwild) ;;
+  ramc)
+    echo "RAMC is not a single-stage finetune." >&2
+    echo "Its average recording is 31.1 min, so by the paper's rule it takes the" >&2
+    echo "AMI schedule: 200 -> 400 -> 800 -> 1600 s. conf/finetune_ramc_8k.yaml is" >&2
+    echo "only the stage-1 template; running it alone trains 10 epochs at 200 s." >&2
+    echo "Use:  ./scripts/run_finetune_ramc_progressive.sh" >&2
+    exit 1 ;;
+  *) echo "corpus must be msdwild (RAMC uses run_finetune_ramc_progressive.sh)" >&2; exit 1 ;;
 esac
 
 LSEEND_ENV="${LSEEND_ENV:-/data/ocr/namvt17/FS-EEND/.venv}"   # path-based, like custom-diaper/.venv

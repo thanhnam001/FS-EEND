@@ -165,6 +165,11 @@ you finetune.
 
 ## Train, then score
 
+Start clean if a previous run exists:
+```bash
+rm -rf logs results            # checkpoints, tensorboard, RTTMs, scores
+```
+
 **MSDWild** -- single stage, their CALLHOME recipe:
 ```bash
 GPUS=0 ./scripts/run_finetune.sh msdwild
@@ -224,6 +229,14 @@ cover the longest test recording: MSDWild 1320.5 s -> 13500, RAMC 1956.1 s ->
 The paper gives epoch counts only for pre-training (Sim2spk / Sim{1-4} /
 Sim{1-6} / Sim{1-8} for 100 / 50 / 50 / 25 epochs). Adaptation epoch counts and
 the checkpoint-averaging windows exist only in the configs.
+
+**`max_speakers` (S).** The paper sets S to the training-set maximum, but
+validation pads labels *up* only and never truncates
+(`oln_tfm_enc_dec_spk_pit_on_the_fly.py:242`), so S must also cover the dev
+set or the val metric breaks on a shape mismatch. Measured per corpus:
+MSDWild train max 4 but **dev reaches 10** -> S=10; RAMC is 2 real speakers
+everywhere plus G00000000 in 286/289 train files -> S=3. S=4 on MSDWild was
+also worse zero-shot (44.35 vs 43.98).
 
 **Averaging window: last 5.** Their `*_infer.yaml` files record which epochs
 were averaged for each published result -- callhome 416-420, dihard2 140-144,
