@@ -185,9 +185,21 @@ GPUS=0 ./scripts/run_finetune_ramc_progressive.sh
 ```
 Resumable: a completed stage is skipped, and `STAGES="800 1600"` restarts from
 part-way (stage numbers stay canonical, and it refuses to start if the previous
-stage's output is missing). Batch sizes default to `8 8 4 2`; the authors use 8
-throughout on AMI but report hitting GPU memory at the longest lengths, so
-override with `BATCHES="8 8 8 8"` on a large card and record which you used.
+stage's output is missing).
+
+**OOM at the longer stages is expected** -- the authors report the same on AMI.
+The defaults hold their *effective* batch of 8 at every stage by trading
+micro-batch for accumulation (`8x1 / 8x1 / 2x4 / 1x8`), so the optimisation
+stays comparable as sequences grow. If 800 s still OOMs:
+
+```bash
+BATCHES="8 8 1 1" ACCMS="1 1 8 8" STAGES="800 1600"     ./scripts/run_finetune_ramc_progressive.sh
+```
+Accumulation is not exactly a larger batch -- the Conformer conv module has a
+`BatchNorm1d` (`nnet/conformer/convolution.py:145`) whose statistics are not
+merged across micro-batches -- but it normalises over batch *and* time, and at
+800 s that is 8000 frames per channel, so the batch axis contributes very
+little. Record whatever split you used.
 
 Zero-shot sanity check (no training, only the `test` split):
 `./scripts/run_infer_score.sh msdwild ./ckpt/simu/simu_1-8spk.ckpt`
@@ -252,7 +264,7 @@ Steps per epoch is exact: audio / chunk length / batch.
 |---|---|---|
 | train audio | 66.1 h | 149.6 h |
 | chunk | 200 s | 200 / 400 / 800 / 1600 s |
-| batch | 4 | 8 / 8 / 4 / 2 |
+| micro-batch x accum | 4 x 1 | 8x1 / 8x1 / 2x4 / 1x8 (effective 8 throughout) |
 | steps per epoch | ~297 | ~337 / 168 / 168 / 168 |
 | epochs | 500 | 10 per stage, 40 total |
 

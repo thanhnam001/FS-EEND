@@ -43,13 +43,27 @@ STAGES="${STAGES:-$ALL_STAGES}"
 AVG_N="${AVG_N:-5}"
 EPOCHS="${EPOCHS:-10}"
 
-# Per-stage batch size. The authors use 8 throughout on AMI, but they also
-# report hitting GPU memory limits at the longest lengths ("the audio length
-# when fine-tuning on AMI is increased only up to 800 s, due to the limit of
-# GPU memory"). Halving at 800 s and again at 1600 s keeps the schedule
-# runnable; override with BATCHES="8 8 8 8" on a large card and say which was
-# used, since batch size is a recipe deviation.
-BATCHES="${BATCHES:-8 8 4 2}"
+# Per-stage micro-batch and gradient accumulation. The authors use batch 8
+# with grad_accm 1 throughout on AMI, but they also report hitting GPU memory
+# limits at the longest lengths ("the audio length when fine-tuning on AMI is
+# increased only up to 800 s, due to the limit of GPU memory").
+#
+# Rather than just shrinking the batch, the defaults hold the EFFECTIVE batch
+# at their 8 for every stage (micro-batch x accumulation = 8), so the
+# optimisation stays comparable as the sequences get longer:
+#
+#   200 s  batch 8 x 1       400 s   batch 8 x 1
+#   800 s  batch 2 x 4       1600 s  batch 1 x 8
+#
+# Caveat: the Conformer convolution module has a BatchNorm1d
+# (nnet/conformer/convolution.py:145), and accumulation does not merge BN
+# statistics across micro-batches. It normalises over batch AND time though,
+# and at 800 s that is 8000 frames per channel, so the batch axis contributes
+# very little -- a tight approximation, but an approximation.
+#
+# If 800 s still OOMs: BATCHES="8 8 1 1" ACCMS="1 1 8 8".
+BATCHES="${BATCHES:-8 8 2 1}"
+ACCMS="${ACCMS:-1 1 4 8}"
 
 [ -d "$LSEEND_ENV" ] || { echo "missing conda env: $LSEEND_ENV" >&2; exit 1; }
 [ -s "$CKPT" ] || { echo "missing init checkpoint: $CKPT -- see ./scripts/download_simu_ckpt.sh" >&2; exit 1; }
@@ -80,6 +94,7 @@ PY="${LSEEND_ENV}/bin/python"
 read -r -a stage_arr <<< "$STAGES"
 read -r -a all_arr <<< "$ALL_STAGES"
 read -r -a batch_arr <<< "$BATCHES"
+read -r -a accm_arr <<< "$ACCMS"
 
 stage_index () {  # position of $1 in ALL_STAGES, 1-based
   local i=1 x
@@ -97,6 +112,7 @@ for secs in "${stage_arr[@]}"; do
   n="$(stage_index "$secs")" || exit 1
   chunk=$(( secs * 10 ))            # 0.1 s units: 200 s -> 2000
   batch="${batch_arr[$(( n - 1 ))]:-${batch_arr[-1]}}"
+  accm="${accm_arr[$(( n - 1 ))]:-${accm_arr[-1]}}"
   name="finetune_ramc_8k_s${n}_${secs}s"
   avg_out="logs/${name}/avg_last${AVG_N}.ckpt"
 
@@ -117,6 +133,7 @@ for secs in "${stage_arr[@]}"; do
   sed -e "s|^  model_name:.*|  model_name: ${name}|" \
       -e "s|^  init_ckpt:.*|  init_ckpt: ${init}|" \
       -e "s|^  batch_size:.*|  batch_size: ${batch}|" \
+      -e "s|^  grad_accm:.*|  grad_accm: ${accm}|" \
       -e "s|^  max_epochs:.*|  max_epochs: ${EPOCHS}|" \
       -e "s|^  chunk_size:.*|  chunk_size: ${chunk}|" \
       -e "s|^  chunk_step:.*|  chunk_step: ${chunk}|" \
@@ -126,7 +143,7 @@ for secs in "${stage_arr[@]}"; do
 
   echo "=================================================================="
   echo "[$(date '+%F %T')] RAMC stage ${n}/${#stage_arr[@]}: ${secs}s"
-  echo "  chunk_size: ${chunk} (= ${secs} s)   batch: ${batch}   epochs: ${EPOCHS}"
+  echo "  chunk_size: ${chunk} (= ${secs} s)   batch: ${batch} x accm ${accm} (effective $(( batch * accm )))   epochs: ${EPOCHS}"
   echo "  init:   ${init}"
   echo "  config: ${run_config}"
   echo "=================================================================="
